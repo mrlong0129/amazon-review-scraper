@@ -1,28 +1,63 @@
 ---
 name: amazon-review-scraper
-description: Scrape Amazon product reviews (written reviews) via woot.com's public AJAX API. Use when users ask to collect, analyze, or export Amazon product reviews for any ASIN.
+description: Dual-source Amazon review collection (Woot scraper + Sorftime MCP), with automatic dedup merge, multi-site support, and variant attributes.
+version: v1.2
 ---
 
-# Amazon Review Scraper
+# Amazon Review Scraper (Dual-Source)
 
-Scrape Amazon product reviews via woot.com's public AJAX endpoint. No API key, no login, no browser automation. Pure Python 3 stdlib.
+Dual-source Amazon review collection: Woot scraper (US, rich metadata) + Sorftime MCP (14 marketplaces, variant attributes), with automatic dedup merge.
 
 ## How It Works
 
+### Source 1: Woot Scraper (US only)
+
 `woot.com/review/Reviews/{ASIN}` is a public AJAX endpoint that returns Amazon review data as JSON (text, ratings, images, videos). Each `(star_filter, sort_order)` combination returns up to 100 reviews. By iterating across 5 star ratings x 4 sort orders and deduplicating, we maximize extraction — typically 85-100% of all written reviews.
+
+### Source 2: Sorftime MCP `product_reviews` (14 marketplaces)
+
+Sorftime MCP provides up to 100 recent reviews (within ~1 year) with **variant attributes** (Color, Size, etc.) across 14 Amazon marketplaces.
+
+### Dedup Merge
+
+When both sources are used (US marketplace), reviews are deduplicated:
+- Match key: `normalize(title) + normalize(text[:100])`
+- Duplicates: keep Woot version (richer metadata) + merge Sorftime's variant attribute
+- Source tag: `woot` / `sorftime` / `merged` (deduplicated)
+
+### Multi-Site Routing
+
+| Marketplace | Data Sources | Dedup |
+|-------------|-------------|-------|
+| US | Woot + Sorftime (dual-source) | Yes, via dedup script |
+| GB/DE/FR/JP/CA/IN/ES/IT/MX/AE/AU/BR/SA | Sorftime MCP only | Not needed |
+
+### Data Source Comparison
+
+| Dimension | Woot Scraper | Sorftime MCP |
+|-----------|-------------|-------------|
+| Marketplaces | US only | 14 marketplaces |
+| Review cap | Theoretically unlimited (max mode) | 100 per ASIN / ~1 year |
+| Variant attributes | No | Yes |
+| Author | Yes | No |
+| Verified Purchase / Vine | Yes | No |
+| Helpful Votes | Yes | No |
+| Images / Video | Yes | No |
+| Review filter | star × sort combinations | Positive / Negative / Both |
 
 ## When to Use
 
 | User Says | Action |
 |-----------|--------|
-| "Get all reviews for B0xxx" | Run max mode |
+| "Get all reviews for B0xxx" | Confirm marketplace → run max mode |
 | "Recent 3 months reviews" | Max mode + date filter |
 | "Show me the bad reviews" | Max mode + filter 1-2 star |
 | "Quick look at reviews" | Basic mode (fast, 100 cap) |
 | "Get reviews for these 5 ASINs" | Loop max mode per ASIN |
 | "Analyze review pain points" | Scrape + generate summary report |
+| "Get reviews from UK site" | Sorftime MCP only (non-US) |
 
-## Scrape Modes
+## Scrape Modes (Woot)
 
 | Mode | Max Reviews | Speed | Best For |
 |------|-------------|-------|----------|
@@ -32,28 +67,80 @@ Scrape Amazon product reviews via woot.com's public AJAX endpoint. No API key, n
 
 ## Execution Steps
 
-### Step 1: Parse User Intent
+### Step 1: Parse User Intent + Confirm Marketplace
 
 Extract from request:
 - **ASIN** (required): 10-character string starting with B0
+- **Marketplace** (required): Must be confirmed before proceeding
 - **Mode**: "quick" → basic / default → max
 - **Date filter** (optional): "recent N months" → compute cutoff date
 - **Star filter** (optional): "bad reviews" → 1-2 star / "good reviews" → 4-5 star
 
-### Step 2: Run Scraper
+**Marketplace Confirmation** (mandatory):
+- User specified marketplace → use it directly
+- User did NOT specify → **ask which marketplace** (US/GB/DE/FR/JP/CA etc.)
+- US → dual-source collection (Woot + Sorftime → dedup merge)
+- Non-US → Sorftime MCP only (`product_reviews` with `amzSite` parameter)
+
+### Step 2: Choose Scrape Mode
+
+| Condition | Recommended Mode | Reason |
+|-----------|-----------------|--------|
+| Quick preview / few reviews | `basic` | Fast, 100 cap |
+| Need full coverage / <500 reviews | `full` | Split by star, near-complete |
+| Many reviews / want maximum | `max` | star × sort maximization (default) |
+| Only specific stars (e.g. bad reviews) | `basic` + filter | Single star usually <100 |
+
+### Step 3: Execute Collection
+
+#### 3a: Woot Scraper (US marketplace)
 
 ```bash
 # Max mode (default, maximum extraction)
-python3 ${SKILL_DIR}/scripts/amazon_review_scraper.py {ASIN} --mode max -o /tmp/{ASIN}_reviews.json
+python3 ${SKILL_DIR}/scripts/amazon_review_scraper.py {ASIN} --mode max -o /tmp/{ASIN}_woot.json
 
 # Basic mode (quick, 100 cap)
-python3 ${SKILL_DIR}/scripts/amazon_review_scraper.py {ASIN} --mode basic -o /tmp/{ASIN}_reviews.json
+python3 ${SKILL_DIR}/scripts/amazon_review_scraper.py {ASIN} --mode basic -o /tmp/{ASIN}_woot.json
 
 # Summary only
 python3 ${SKILL_DIR}/scripts/amazon_review_scraper.py {ASIN} --summary
 ```
 
-### Step 3: Post-Processing (if needed)
+#### 3b: Sorftime MCP (all marketplaces)
+
+```
+Sorftime MCP: product_reviews(amzSite="{SITE}", asin="{ASIN}", reviewType="Both")
+```
+
+Parameters:
+- `amzSite`: US/GB/DE/FR/IN/CA/JP/ES/IT/MX/AE/AU/BR/SA
+- `reviewType`: Both (all) / Positive (4-5★) / Negative (1-3★)
+- Returns: up to 100 recent reviews (~1 year), with variant attributes
+
+Save Sorftime results as JSON: `/tmp/{ASIN}_sorftime.json`
+
+#### 3c: Dedup Merge (dual-source, US only)
+
+```bash
+# Dual-source merge
+python3 ${SKILL_DIR}/scripts/review_dedup_merge.py \
+  --woot /tmp/{ASIN}_woot.json \
+  --sorftime /tmp/{ASIN}_sorftime.json \
+  -o /tmp/{ASIN}_merged.json
+
+# Woot only (normalize format)
+python3 ${SKILL_DIR}/scripts/review_dedup_merge.py --woot /tmp/{ASIN}_woot.json -o /tmp/{ASIN}_merged.json
+
+# Sorftime only (normalize format, non-US)
+python3 ${SKILL_DIR}/scripts/review_dedup_merge.py --sorftime /tmp/{ASIN}_sorftime.json -o /tmp/{ASIN}_merged.json
+```
+
+**Dedup strategy**:
+- Match key: `normalize(title) + normalize(text[:100])`
+- Duplicates: keep Woot version (Author/VP/Vine/Helpful/Media), merge Sorftime's variant attribute
+- Source tag: `woot` / `sorftime` / `merged` (deduplicated)
+
+### Step 4: Post-Processing (if needed)
 
 #### Date Filtering
 
@@ -85,7 +172,7 @@ bad_reviews = [r for r in reviews if r.get("OverallRating", 0) <= 2]
 good_reviews = [r for r in reviews if r.get("OverallRating", 0) >= 4]
 ```
 
-### Step 4: Generate Report
+### Step 5: Generate Report
 
 **You MUST produce two markdown file deliverables** (written to disk, not inline chat output).
 
@@ -130,9 +217,6 @@ good_reviews = [r for r in reviews if r.get("OverallRating", 0) >= 4]
 - **Date**: Month DD, YYYY | **VP**: Yes/No | **Helpful**: X | **Media**: (photo)/(video)
 - Full review text here...
 
-### "Review Title 2"
-...
-
 ## 2★ Reviews (X)
 [same format]
 
@@ -173,14 +257,12 @@ good_reviews = [r for r in reviews if r.get("OverallRating", 0) >= 4]
 | Rank | Theme | Frequency | Representative Quotes |
 |------|-------|-----------|----------------------|
 | 1 | {clustered theme} | ~X% of positive reviews | "quote 1" / "quote 2" |
-| 2 | ... | ... | ... |
 
 ## Negative Themes (1-2★, X reviews)
 
 | Theme | Frequency | % of Negative | Severity | Representative Quotes |
 |-------|-----------|---------------|----------|-----------------------|
 | {clustered pain point} | X times | X% | High/Medium/Low | "quote" |
-| ... | ... | ... | ... | ... |
 
 ## 3★ Review Signals (X reviews)
 
@@ -188,23 +270,14 @@ good_reviews = [r for r in reviews if r.get("OverallRating", 0) >= 4]
 
 ## Time Trends
 
-### Review Volume
-| Period | Monthly Avg | Characteristics |
-|--------|-------------|-----------------|
-| YYYY-MM ~ YYYY-MM | X/month | description |
-
-### Rating Trend
-| Period | Avg Rating | 5★ % | Notes |
-|--------|------------|-------|-------|
-| YYYY H1 | X.X | X% | ... |
+- Review volume changes (which months have more/fewer reviews)
+- Whether negative reviews cluster in specific periods
+- Rating trend (improving/deteriorating)
 
 ## Key Findings / Anomalies
 
-### 1. {Finding Title} — Severity: High/Medium/Low
-[Description with evidence]
-
-### 2. {Finding Title} — Severity: High/Medium/Low
-[Description with evidence]
+- [Finding 1: e.g. Vine review ratio unusually high]
+- [Finding 2: e.g. negative reviews spiked in specific month]
 
 ## Actionable Recommendations
 
@@ -218,7 +291,6 @@ good_reviews = [r for r in reviews if r.get("OverallRating", 0) >= 4]
 - Positive/Negative themes must be **semantically clustered** from review content, not simple keyword counting
 - Pick 1-2 most representative quotes per theme
 - Actionable recommendations must be specific, not generic
-- 3★ reviews get their own section — they contain the highest information density
 
 ---
 
@@ -228,7 +300,7 @@ good_reviews = [r for r in reviews if r.get("OverallRating", 0) >= 4]
 2. Generate Deliverable 2 (summary) based on Deliverable 1 — requires semantic analysis
 3. Report to user: two file paths + brief summary (3-5 sentences highlighting key findings)
 
-## API Response Fields
+## API Response Fields (Woot)
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -243,7 +315,7 @@ good_reviews = [r for r in reviews if r.get("OverallRating", 0) >= 4]
 | `ImageUrls` | array | Review image URLs |
 | `MediaUrls` | array | Review video URLs (src + poster) |
 
-## Coverage
+## Coverage (Woot)
 
 | Product Size | Expected Coverage |
 |-------------|-------------------|
@@ -262,15 +334,31 @@ Amazon shows "X ratings" which includes **star-only ratings** (no text). This to
 |---------|-------------|
 | Confusing ratings count with reviews count | Clarify: ratings include star-only, written reviews are a subset |
 | Expecting 100% extraction | 5-star reviews cap at ~135 per ASIN |
-| Duplicate reviews across runs | Max mode has built-in dedup; don't merge multiple runs |
+| Forgetting to dedup dual-source | Always use `review_dedup_merge.py` when combining Woot + Sorftime |
+| Merging without dedup | Duplicate reviews will appear twice without the dedup script |
+| Woot Title HTML entities | Woot returns `&amp;` etc. — dedup script handles `html.unescape` |
 | Date parsing failures | `OriginDescription` format may vary; implement fallback |
 | Rate limiting on bulk ASINs | Add 1-2 second delay between ASINs |
-| Non-US marketplaces | Only Amazon US supported (woot.com = amazon.com) |
+| Non-US marketplaces with Woot | Woot only supports US — use Sorftime MCP for other sites |
 
 ## Limitations
 
-- Amazon US (`amazon.com`) only
+- Woot: Amazon US only. Sorftime: 14 marketplaces (100 reviews/~1 year cap)
 - Written reviews only, not star-only ratings
-- 100 reviews per `(filter, sort)` combination (API hard limit)
+- 100 reviews per `(filter, sort)` combination (Woot API hard limit)
 - Products with >135 five-star written reviews cannot be fully extracted for that star level
+- Sorftime has no Author/VP/Vine/Helpful/Media metadata
 - Python 3.6+ required (no external dependencies)
+
+## Version History
+
+| Version | Date | Changes |
+|---------|------|---------|
+| v1.2 | 2026-03-04 | Dual-source: added Sorftime MCP + dedup merge script + multi-site routing + variant attributes + marketplace confirmation |
+| v1.1 | 2026-03-03 | Added two-document delivery spec (full data + summary analysis) |
+| v1.0 | 2026-03-03 | Initial: basic/full/max modes, date/star filtering, coverage notes |
+
+---
+
+*Dependencies: Python 3, `scripts/amazon_review_scraper.py`, `scripts/review_dedup_merge.py`, Sorftime MCP*
+*Woot limits: US only, written reviews only, 5★ cap ~135 | Sorftime limits: 100 reviews/~1 year, 14 marketplaces*
