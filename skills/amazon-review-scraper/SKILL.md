@@ -87,23 +87,146 @@ good_reviews = [r for r in reviews if r.get("OverallRating", 0) >= 4]
 
 ### Step 4: Generate Report
 
-Produce two markdown documents:
+**You MUST produce two markdown file deliverables** (written to disk, not inline chat output).
 
-#### Document 1: Full Review Data
+---
 
-All reviews organized by star rating (1 star to 5 star), each with:
-- Date, Verified Purchase status, Helpful votes, Media indicators
-- Full review text (never truncate)
+#### Deliverable 1: Full Review Data
 
-Include summary table: total count, star distribution, verified %, vine %, image/video counts, date range.
+**Filename**: `{ASIN}_reviews-data_{YYYY-MM-DD}.md`
 
-#### Document 2: Review Summary & Analysis
+**Template**:
 
-- **Positive themes** (4-5 star): Semantic clustering of praise points with frequency and representative quotes
-- **Negative themes** (1-2 star): Pain points with frequency, severity, and representative quotes
-- **Time trends**: Review volume changes, rating trend shifts
-- **Anomalies**: Unusual patterns (review spikes, rating shifts, vine concentration)
-- **Actionable insights**: Prioritized recommendations based on findings
+```markdown
+# {ASIN} Review Data
+
+> Scraped: {YYYY-MM-DD HH:MM} | Mode: {mode} | Coverage: {estimate}
+
+## Overview
+
+| Metric | Value |
+|--------|-------|
+| Total Reviews | X |
+| Star Distribution | 5★: X / 4★: X / 3★: X / 2★: X / 1★: X |
+| Verified Purchase | X (X%) |
+| Vine Review | X |
+| With Images | X |
+| With Video | X |
+| Date Range | YYYY-MM-DD ~ YYYY-MM-DD |
+| Raw JSON | `/tmp/{ASIN}_reviews.json` |
+
+[If date/star filters applied, note filter criteria and filtered count]
+
+## Monthly Distribution
+
+| Month | Count | Avg Rating |
+|-------|-------|------------|
+| 2026-02 | X | X.X |
+| ... | ... | ... |
+
+## 1★ Reviews (X)
+
+### "Review Title"
+- **Date**: Month DD, YYYY | **VP**: Yes/No | **Helpful**: X | **Media**: (photo)/(video)
+- Full review text here...
+
+### "Review Title 2"
+...
+
+## 2★ Reviews (X)
+[same format]
+
+## 3★ Reviews (X)
+[same format]
+
+## 4★ Reviews (X)
+[same format]
+
+## 5★ Reviews (X)
+[same format]
+```
+
+**Rules**:
+- Group by star rating (1★ → 5★), within each group sort by date descending (newest first)
+- Include full review text — never truncate
+- Mark reviews with images as (photo), with video as (video)
+
+---
+
+#### Deliverable 2: Review Summary & Analysis
+
+**Filename**: `{ASIN}_reviews-summary_{YYYY-MM-DD}.md`
+
+**Template**:
+
+```markdown
+# {ASIN} Review Summary
+
+> Based on X written reviews | {YYYY-MM-DD}
+
+## Basic Stats
+
+[same overview table as Deliverable 1]
+
+## Positive Themes (4-5★, X reviews)
+
+| Rank | Theme | Frequency | Representative Quotes |
+|------|-------|-----------|----------------------|
+| 1 | {clustered theme} | ~X% of positive reviews | "quote 1" / "quote 2" |
+| 2 | ... | ... | ... |
+
+## Negative Themes (1-2★, X reviews)
+
+| Theme | Frequency | % of Negative | Severity | Representative Quotes |
+|-------|-----------|---------------|----------|-----------------------|
+| {clustered pain point} | X times | X% | High/Medium/Low | "quote" |
+| ... | ... | ... | ... | ... |
+
+## 3★ Review Signals (X reviews)
+
+[3-star reviews are high-information — extract key pain points and mixed feedback]
+
+## Time Trends
+
+### Review Volume
+| Period | Monthly Avg | Characteristics |
+|--------|-------------|-----------------|
+| YYYY-MM ~ YYYY-MM | X/month | description |
+
+### Rating Trend
+| Period | Avg Rating | 5★ % | Notes |
+|--------|------------|-------|-------|
+| YYYY H1 | X.X | X% | ... |
+
+## Key Findings / Anomalies
+
+### 1. {Finding Title} — Severity: High/Medium/Low
+[Description with evidence]
+
+### 2. {Finding Title} — Severity: High/Medium/Low
+[Description with evidence]
+
+## Actionable Recommendations
+
+| Priority | Recommendation | Evidence |
+|----------|---------------|----------|
+| P0 | {specific action} | {based on which finding} |
+| P1 | ... | ... |
+```
+
+**Rules**:
+- Positive/Negative themes must be **semantically clustered** from review content, not simple keyword counting
+- Pick 1-2 most representative quotes per theme
+- Actionable recommendations must be specific, not generic
+- 3★ reviews get their own section — they contain the highest information density
+
+---
+
+#### Delivery Flow
+
+1. Generate Deliverable 1 (data document) — pure data organization, no analysis needed
+2. Generate Deliverable 2 (summary) based on Deliverable 1 — requires semantic analysis
+3. Report to user: two file paths + brief summary (3-5 sentences highlighting key findings)
 
 ## API Response Fields
 
