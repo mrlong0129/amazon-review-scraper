@@ -1,7 +1,7 @@
 ---
 name: amazon-review-scraper
 description: Dual-source Amazon review collection (Woot scraper + Sorftime MCP), with automatic dedup merge, multi-site support, and variant attributes.
-version: v1.2
+version: v1.3
 ---
 
 # Amazon Review Scraper (Dual-Source)
@@ -144,7 +144,7 @@ python3 ${SKILL_DIR}/scripts/review_dedup_merge.py --sorftime /tmp/{ASIN}_sorfti
 
 #### Date Filtering
 
-Review dates are in `OriginDescription`: `"Reviewed in the United States on February 21, 2026"`
+Review dates are in `OriginDescription`. Use the built-in `parse_review_date()` function (supports multiple formats). Do not write your own date parser.
 
 ```python
 import json, re
@@ -157,10 +157,32 @@ reviews = data["reviews"]
 cutoff = datetime.now() - timedelta(days=90)  # last 3 months
 
 def parse_date(desc):
-    m = re.search(r"on (\w+ \d+, \d{4})", desc)
+    """Multi-format date parser. Returns None if unparseable (never return partial dates)."""
+    if not desc:
+        return None
+    # Format 1: "on Month DD, YYYY"
+    m = re.search(r"on (\w+ \d{1,2},?\s+\d{4})", desc)
     if m:
-        return datetime.strptime(m.group(1), "%B %d, %Y")
-    return None
+        date_str = re.sub(r"\s+", " ", m.group(1).replace(",", "").strip())
+        try:
+            return datetime.strptime(date_str, "%B %d %Y")
+        except ValueError:
+            pass
+    # Format 2: "on DD. Month YYYY" (European)
+    m = re.search(r"on (\d{1,2})\.\s*(\w+)\s+(\d{4})", desc)
+    if m:
+        try:
+            return datetime.strptime(f"{m.group(2)} {m.group(1)} {m.group(3)}", "%B %d %Y")
+        except ValueError:
+            pass
+    # Format 3: "Month DD YYYY" anywhere
+    m = re.search(r"([A-Z][a-z]+)\s+(\d{1,2}),?\s+(\d{4})", desc)
+    if m:
+        try:
+            return datetime.strptime(f"{m.group(1)} {m.group(2)} {m.group(3)}", "%B %d %Y")
+        except ValueError:
+            pass
+    return None  # Do NOT return (year, 0) — causes YYYY-00 bug
 
 filtered = [r for r in reviews if (d := parse_date(r.get("OriginDescription", ""))) and d >= cutoff]
 ```
@@ -175,6 +197,11 @@ good_reviews = [r for r in reviews if r.get("OverallRating", 0) >= 4]
 ### Step 5: Generate Report
 
 **You MUST produce two markdown file deliverables** (written to disk, not inline chat output).
+
+**Privacy rules (mandatory)**:
+- **Do NOT mention data source names** in reports (no "Woot", "Sorftime", "scraper" etc.)
+- **Do NOT include a "Data Source" row** in overview tables
+- Reports should present review data only, without exposing collection methods
 
 ---
 
@@ -200,11 +227,13 @@ good_reviews = [r for r in reviews if r.get("OverallRating", 0) >= 4]
 | With Images | X |
 | With Video | X |
 | Date Range | YYYY-MM-DD ~ YYYY-MM-DD |
-| Raw JSON | `/tmp/{ASIN}_reviews.json` |
 
 [If date/star filters applied, note filter criteria and filtered count]
 
 ## Monthly Distribution
+
+> Use `summary.monthly_distribution` from JSON output (pre-computed by script).
+> Only display months with successfully parsed dates. Never show "YYYY-00" format.
 
 | Month | Count | Avg Rating |
 |-------|-------|------------|
@@ -354,6 +383,7 @@ Amazon shows "X ratings" which includes **star-only ratings** (no text). This to
 
 | Version | Date | Changes |
 |---------|------|---------|
+| v1.3 | 2026-03-04 | Bug fix: monthly distribution "YYYY-00" date parsing (script pre-computes) + privacy rules (reports don't expose data source) |
 | v1.2 | 2026-03-04 | Dual-source: added Sorftime MCP + dedup merge script + multi-site routing + variant attributes + marketplace confirmation |
 | v1.1 | 2026-03-03 | Added two-document delivery spec (full data + summary analysis) |
 | v1.0 | 2026-03-03 | Initial: basic/full/max modes, date/star filtering, coverage notes |

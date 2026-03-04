@@ -26,6 +26,7 @@ Limits:
 """
 
 import json
+import re
 import urllib.request
 import urllib.parse
 import sys
@@ -155,12 +156,55 @@ def scrape_max(asin):
     return unique
 
 
+def parse_review_date(review):
+    """Parse review date from OriginDescription, return datetime or None.
+
+    Supports multiple formats:
+    - "Reviewed in the United States on February 21, 2026"
+    - "Reviewed in Germany on 21. February 2026"
+    - Other patterns containing Month DD, YYYY
+    """
+    desc = review.get("OriginDescription", "")
+    if not desc:
+        return None
+
+    # Format 1: "on Month DD, YYYY" (standard US)
+    m = re.search(r"on (\w+ \d{1,2},?\s+\d{4})", desc)
+    if m:
+        date_str = re.sub(r"\s+", " ", m.group(1).replace(",", "").strip())
+        try:
+            return datetime.strptime(date_str, "%B %d %Y")
+        except ValueError:
+            pass
+
+    # Format 2: "on DD. Month YYYY" (European)
+    m = re.search(r"on (\d{1,2})\.\s*(\w+)\s+(\d{4})", desc)
+    if m:
+        try:
+            return datetime.strptime(f"{m.group(2)} {m.group(1)} {m.group(3)}", "%B %d %Y")
+        except ValueError:
+            pass
+
+    # Format 3: generic "Month DD YYYY" anywhere in string
+    m = re.search(r"([A-Z][a-z]+)\s+(\d{1,2}),?\s+(\d{4})", desc)
+    if m:
+        try:
+            return datetime.strptime(f"{m.group(1)} {m.group(2)} {m.group(3)}", "%B %d %Y")
+        except ValueError:
+            pass
+
+    # Do NOT return partial date (year-only) — causes YYYY-00 bug
+    return None
+
+
 def build_summary(asin, reviews, mode):
-    """Build summary statistics."""
+    """Build summary statistics including monthly distribution."""
     star_counts = {5: 0, 4: 0, 3: 0, 2: 0, 1: 0}
     verified = 0
     with_images = 0
     with_video = 0
+    monthly = {}
+    dates = []
 
     for r in reviews:
         rating = r.get("OverallRating", 0)
@@ -173,6 +217,34 @@ def build_summary(asin, reviews, mode):
         if r.get("MediaUrls"):
             with_video += 1
 
+        # Monthly distribution
+        dt = parse_review_date(r)
+        if dt:
+            dates.append(dt)
+            key = dt.strftime("%Y-%m")
+            if key not in monthly:
+                monthly[key] = {"count": 0, "total_rating": 0}
+            monthly[key]["count"] += 1
+            monthly[key]["total_rating"] += rating
+
+    # Sort monthly distribution (newest first)
+    monthly_distribution = []
+    for key in sorted(monthly.keys(), reverse=True):
+        m = monthly[key]
+        monthly_distribution.append({
+            "month": key,
+            "count": m["count"],
+            "avg_rating": round(m["total_rating"] / m["count"], 1) if m["count"] else 0,
+        })
+
+    # Date range
+    date_range = None
+    if dates:
+        date_range = {
+            "earliest": min(dates).strftime("%Y-%m-%d"),
+            "latest": max(dates).strftime("%Y-%m-%d"),
+        }
+
     return {
         "asin": asin,
         "mode": mode,
@@ -182,6 +254,8 @@ def build_summary(asin, reviews, mode):
         "verified_purchases": verified,
         "with_images": with_images,
         "with_video": with_video,
+        "monthly_distribution": monthly_distribution,
+        "date_range": date_range,
     }
 
 
